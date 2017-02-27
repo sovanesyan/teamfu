@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"io/ioutil"
 	"log"
 
 	"time"
@@ -26,104 +28,102 @@ type Commit struct {
 }
 
 func main() {
-	// f, _ := os.Create("cpu.prof")
-	// pprof.StartCPUProfile(f)
-	// defer pprof.StopCPUProfile()
-
-	processRepository()
-
-}
-
-func processRepository() {
 	repo, err := git.OpenRepository("/Users/sovanesyan/Work/tensorflow-full")
 
 	if err != nil {
 		log.Fatal("Could not open repository: " + err.Error())
 		return
 	}
+	// f, _ := os.Create("cpu.prof")
+	// pprof.StartCPUProfile(f)
+	// defer pprof.StopCPUProfile()
 
+	log.Print("Started")
+	processRepository(repo)
+	log.Print("Finished")
+
+	// oid, _ := git.NewOid("ea2aac69da10fed4acac18dc291790433d9af0ac")
+	// commit, _ := repo.LookupCommit(oid)
+	// cm := processCommit(commit, repo)
+	// log.Print(cm)
+}
+
+func processRepository(repo *git.Repository) {
 	walker, err := repo.Walk()
 	if err != nil {
 		log.Fatal("Could not create walker: " + err.Error())
 		return
 	}
 
-	commits := []Commit{}
+	commits := make(map[git.Oid]Commit)
 	count := 0
+
 	walker.PushHead()
+	walker.Sorting(git.SortReverse)
 	walker.Iterate(func(commit *git.Commit) bool {
 		count++
-		if count > 100 {
+		if count > 1000 {
 			return false
 		}
-		parent := commit.Parent(0) //TODO: make it so that it is aggregated
-		tree, _ := commit.Tree()
-		parentTree, _ := parent.Tree()
 
-		diffOptions, _ := git.DefaultDiffOptions()
-		diff, _ := repo.DiffTreeToTree(parentTree, tree, &diffOptions)
-		stats, _ := diff.Stats()
+		commits[*commit.Id()] = processCommit(commit, repo)
 
-		commitMetadata := new(Commit)
-		commitMetadata.id = commit.Id().String()
-		commitMetadata.isMerge = commit.ParentCount() != 1
-		commitMetadata.authorEmail = commit.Author().Email
-		commitMetadata.authorName = commit.Author().Name
-		commitMetadata.createdAt = commit.Author().When
-		commitMetadata.summary = commit.Summary()
-		commitMetadata.insertions = uint(stats.Insertions())
-		commitMetadata.deletions = uint(stats.Deletions())
-		commitMetadata.filesChanged = uint(stats.FilesChanged())
+		return true
+	})
 
-		oldOid := findOldEnoughCommit(*commit)
+	log.Print(commits)
+
+	marshaledData, _ := json.Marshal(commits)
+	ioutil.WriteFile("commits", marshaledData, 0644)
+}
+
+func processCommit(commit *git.Commit, repo *git.Repository) Commit {
+	log.Printf("Commit #%v", commit.Id())
+	cm := createCommitMetadata(commit)
+	if commit.ParentCount() == 0 {
+		diff := createDiff(commit, nil, repo)
+		applyStats(&cm, diff)
+		return cm
+	}
+	for i := uint(0); i < commit.ParentCount(); i++ {
+		parent := commit.Parent(i)
+		diff := createDiff(commit, commit.Parent(i), repo)
+		applyStats(&cm, diff)
 
 		diff.ForEach(func(delta git.DiffDelta, number float64) (git.DiffForEachHunkCallback, error) {
-
 			return func(hunk git.DiffHunk) (git.DiffForEachLineCallback, error) {
-				blameOptions, _ := git.DefaultBlameOptions()
-				blameOptions.NewestCommit = parent.Id()
-				blameOptions.OldestCommit = &oldOid
-				blameOptions.MinLine = uint32(hunk.OldStart)
-				blameOptions.MaxLine = uint32(hunk.OldStart + hunk.OldLines)
-				blame, _ := repo.BlameFile(delta.OldFile.Path, &blameOptions)
 
-				commitMetadata.hunkChanges++
-				commitMetadata.newWork += uint(hunk.NewLines - hunk.OldLines)
+				blame := blameFile(commit, parent, &hunk, &delta, repo)
+
+				cm.hunkChanges++
+				cm.newWork += uint(hunk.NewLines - hunk.OldLines)
 
 				return func(line git.DiffLine) error {
+					if delta.NewFile.Mode == 57344 {
+						log.Printf("Panic averted: %v", commit.Id())
+						return nil
+					}
 					if line.NewLineno != -1 {
 						return nil
 					}
 					hunk, _ := blame.HunkByLine(line.OldLineno)
 
 					if commit.Author().When.Add(-3 * 7 * 24 * time.Hour).After(hunk.FinalSignature.When) {
-						commitMetadata.refactoring++
-					} else if hunk.FinalSignature.Email == commitMetadata.authorEmail {
-						commitMetadata.churn++
+						cm.refactoring++
+					} else if hunk.FinalSignature.Email == cm.authorEmail {
+						cm.churn++
 					} else {
-						commitMetadata.helpedOthers++
+						cm.helpedOthers++
 					}
 					return nil
 				}, nil
 			}, nil
 		}, git.DiffDetailLines)
-
-		log.Printf("%+v\n", commitMetadata)
-		commits = append(commits, *commitMetadata)
-		return true
-	})
-
-	log.Print(len(commits))
-
-	// marshaledData, _ := json.Marshal(commits)
-	// ioutil.WriteFile("commits", marshaledData, 0644)
-	// newOid, _ := git.NewOid("9d3eebb35ae339bfc8d58f56bb912336ca733e2d")
-	// commit, _ := repo.LookupCommit(newOid)
-
+	}
+	return cm
 }
 
-func findOldEnoughCommit(commit git.Commit) git.Oid {
-
+func findOldEnoughCommit(commit git.Commit) *git.Commit {
 	current := commit
 	for current.Author().When.After(commit.Author().When.Add(-3 * 7 * 24 * time.Hour)) {
 		if current.ParentCount() == 0 {
@@ -132,5 +132,51 @@ func findOldEnoughCommit(commit git.Commit) git.Oid {
 		current = *current.Parent(0)
 	}
 
-	return *current.Id()
+	return &current
+}
+
+func createCommitMetadata(commit *git.Commit) Commit {
+	commitMetadata := new(Commit)
+	commitMetadata.id = commit.Id().String()
+	commitMetadata.isMerge = commit.ParentCount() != 1
+	commitMetadata.authorEmail = commit.Author().Email
+	commitMetadata.authorName = commit.Author().Name
+	commitMetadata.createdAt = commit.Author().When
+	commitMetadata.summary = commit.Summary()
+
+	return *commitMetadata
+}
+
+func createDiff(commit, parent *git.Commit, repo *git.Repository) git.Diff {
+	tree, _ := commit.Tree()
+	var parentTree *git.Tree
+	if parent != nil {
+		parentTree, _ = parent.Tree()
+	}
+
+	diffOptions, _ := git.DefaultDiffOptions()
+	diffOptions.IgnoreSubmodules = git.SubmoduleIgnoreAll
+	diff, _ := repo.DiffTreeToTree(parentTree, tree, &diffOptions)
+
+	return *diff
+}
+
+func applyStats(cm *Commit, diff git.Diff) {
+	stats, _ := diff.Stats()
+	cm.insertions += uint(stats.Insertions())
+	cm.deletions += uint(stats.Deletions())
+	cm.filesChanged += uint(stats.FilesChanged())
+}
+
+func blameFile(commit, parent *git.Commit, hunk *git.DiffHunk, delta *git.DiffDelta, repo *git.Repository) *git.Blame {
+	oldCommit := findOldEnoughCommit(*commit)
+
+	blameOptions, _ := git.DefaultBlameOptions()
+	blameOptions.NewestCommit = parent.Id()
+	blameOptions.OldestCommit = oldCommit.Id()
+	blameOptions.MinLine = uint32(hunk.OldStart)
+	blameOptions.MaxLine = uint32(hunk.OldStart + hunk.OldLines)
+	blame, _ := repo.BlameFile(delta.OldFile.Path, &blameOptions)
+
+	return blame
 }
