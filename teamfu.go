@@ -25,10 +25,6 @@ type Commit struct {
 	churn        uint
 }
 
-var (
-	threeWeeksAgo = time.Now().Add(-3 * 7 * 24 * time.Hour)
-)
-
 func main() {
 	// f, _ := os.Create("cpu.prof")
 	// pprof.StartCPUProfile(f)
@@ -39,7 +35,7 @@ func main() {
 }
 
 func processRepository() {
-	repo, err := git.OpenRepository("/Users/sovanesyan/Work/tensorflow")
+	repo, err := git.OpenRepository("/Users/sovanesyan/Work/tensorflow-full")
 
 	if err != nil {
 		log.Fatal("Could not open repository: " + err.Error())
@@ -51,13 +47,13 @@ func processRepository() {
 		log.Fatal("Could not create walker: " + err.Error())
 		return
 	}
-	oldOid := findOldEnoughCommit(*repo)
+
 	commits := []Commit{}
 	count := 0
 	walker.PushHead()
 	walker.Iterate(func(commit *git.Commit) bool {
 		count++
-		if count > 20 {
+		if count > 100 {
 			return false
 		}
 		parent := commit.Parent(0) //TODO: make it so that it is aggregated
@@ -79,6 +75,8 @@ func processRepository() {
 		commitMetadata.deletions = uint(stats.Deletions())
 		commitMetadata.filesChanged = uint(stats.FilesChanged())
 
+		oldOid := findOldEnoughCommit(*commit)
+
 		diff.ForEach(func(delta git.DiffDelta, number float64) (git.DiffForEachHunkCallback, error) {
 
 			return func(hunk git.DiffHunk) (git.DiffForEachLineCallback, error) {
@@ -98,7 +96,7 @@ func processRepository() {
 					}
 					hunk, _ := blame.HunkByLine(line.OldLineno)
 
-					if threeWeeksAgo.After(hunk.FinalSignature.When) {
+					if commit.Author().When.Add(-3 * 7 * 24 * time.Hour).After(hunk.FinalSignature.When) {
 						commitMetadata.refactoring++
 					} else if hunk.FinalSignature.Email == commitMetadata.authorEmail {
 						commitMetadata.churn++
@@ -124,18 +122,15 @@ func processRepository() {
 
 }
 
-func findOldEnoughCommit(repo git.Repository) git.Oid {
+func findOldEnoughCommit(commit git.Commit) git.Oid {
 
-	oid := new(git.Oid)
-	walker, _ := repo.Walk()
-	walker.PushHead()
-	walker.Iterate(func(commit *git.Commit) bool {
-		if threeWeeksAgo.After(commit.Author().When) {
-			oid = commit.Id()
-			log.Printf("OldOid: %v", oid)
-			return false
+	current := commit
+	for current.Author().When.After(commit.Author().When.Add(-3 * 7 * 24 * time.Hour)) {
+		if current.ParentCount() == 0 {
+			break
 		}
-		return true
-	})
-	return *oid
+		current = *current.Parent(0)
+	}
+
+	return *current.Id()
 }
