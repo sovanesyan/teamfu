@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/json"
-	"io/ioutil"
 	"log"
 
 	"time"
@@ -28,18 +26,12 @@ type Commit struct {
 }
 
 func main() {
-	repo, err := git.OpenRepository("/Users/sovanesyan/Work/tensorflow-full")
-
-	if err != nil {
-		log.Fatal("Could not open repository: " + err.Error())
-		return
-	}
 	// f, _ := os.Create("cpu.prof")
 	// pprof.StartCPUProfile(f)
 	// defer pprof.StopCPUProfile()
 
 	log.Print("Started")
-	processRepository(repo)
+	processRepository()
 	log.Print("Finished")
 
 	// oid, _ := git.NewOid("ea2aac69da10fed4acac18dc291790433d9af0ac")
@@ -48,36 +40,50 @@ func main() {
 	// log.Print(cm)
 }
 
-func processRepository(repo *git.Repository) {
-	walker, err := repo.Walk()
-	if err != nil {
-		log.Fatal("Could not create walker: " + err.Error())
-		return
+func createRepository() *git.Repository {
+	repo, _ := git.OpenRepository("/Users/sovanesyan/Work/tensorflow-full")
+	return repo
+}
+
+func processRepository() {
+
+	commits := findCommits()
+	log.Print(commits)
+
+	log.Print(len(commits))
+	for _, oid := range commits {
+		commit := processCommit(oid)
+		log.Print(commit)
 	}
 
-	commits := make(map[git.Oid]Commit)
-	count := 0
+	// marshaledData, _ := json.Marshal(commits)
+	// ioutil.WriteFile("commits", marshaledData, 0644)
+}
 
+func findCommits() []git.Oid {
+	repo := createRepository()
+	walker, _ := repo.Walk()
+
+	commitCount := 0
+	commits := []git.Oid{}
 	walker.PushHead()
 	walker.Sorting(git.SortReverse)
+
 	walker.Iterate(func(commit *git.Commit) bool {
-		count++
-		if count > 1000 {
+		if commitCount >= 500 {
 			return false
 		}
-
-		commits[*commit.Id()] = processCommit(commit, repo)
+		commits = append(commits, *commit.Id())
+		commitCount++
 
 		return true
 	})
-
-	log.Print(commits)
-
-	marshaledData, _ := json.Marshal(commits)
-	ioutil.WriteFile("commits", marshaledData, 0644)
+	return commits
 }
 
-func processCommit(commit *git.Commit, repo *git.Repository) Commit {
+func processCommit(oid git.Oid) Commit {
+	repo := createRepository()
+	commit, _ := repo.LookupCommit(&oid)
 	log.Printf("Commit #%v", commit.Id())
 	cm := createCommitMetadata(commit)
 	if commit.ParentCount() == 0 {
