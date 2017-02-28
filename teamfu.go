@@ -40,51 +40,56 @@ func main() {
 	// log.Print(cm)
 }
 
+func processRepository() {
+
+	ids := findCommitIds()
+
+	commits := make(map[string]Commit)
+	for oid := range ids {
+		commits[oid.String()] = processCommit(oid)
+		log.Print(oid.String())
+	}
+}
+
 func createRepository() *git.Repository {
 	repo, _ := git.OpenRepository("/Users/sovanesyan/Work/tensorflow-full")
 	return repo
 }
 
-func processRepository() {
-
-	commits := findCommits()
-	log.Print(commits)
-
-	log.Print(len(commits))
-	for _, oid := range commits {
-		commit := processCommit(oid)
-		log.Print(commit)
-	}
-
-	// marshaledData, _ := json.Marshal(commits)
-	// ioutil.WriteFile("commits", marshaledData, 0644)
-}
-
-func findCommits() []git.Oid {
+func findCommitIds() chan git.Oid {
 	repo := createRepository()
 	walker, _ := repo.Walk()
 
 	commitCount := 0
-	commits := []git.Oid{}
+
 	walker.PushHead()
 	walker.Sorting(git.SortReverse)
+	channel := make(chan git.Oid)
 
-	walker.Iterate(func(commit *git.Commit) bool {
-		if commitCount >= 500 {
-			return false
-		}
-		commits = append(commits, *commit.Id())
-		commitCount++
+	go func() {
+		log.Print("something")
+		walker.Iterate(func(commit *git.Commit) bool {
 
-		return true
-	})
-	return commits
+			if commitCount >= 500 {
+				close(channel)
+				return false
+			}
+
+			channel <- *commit.Id()
+			commitCount++
+
+			return true
+		})
+	}()
+	log.Print("bohos")
+	return channel
 }
 
 func processCommit(oid git.Oid) Commit {
 	repo := createRepository()
+	defer repo.Free()
 	commit, _ := repo.LookupCommit(&oid)
-	log.Printf("Commit #%v", commit.Id())
+	defer commit.Free()
 	cm := createCommitMetadata(commit)
 	if commit.ParentCount() == 0 {
 		diff := createDiff(commit, nil, repo)
