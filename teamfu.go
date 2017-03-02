@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"strings"
 
 	"time"
 
@@ -24,6 +25,11 @@ type Commit struct {
 	refactoring  uint
 	churn        uint
 }
+
+const maxCommits = 50000
+
+//const repositoryPath = "/Users/sovanesyan/Work/tensorflow-full"
+const repositoryPath = "/Users/sovanesyan/Work/angular"
 
 func main() {
 	// f, _ := os.Create("cpu.prof")
@@ -52,7 +58,7 @@ func processRepository() {
 }
 
 func createRepository() *git.Repository {
-	repo, _ := git.OpenRepository("/Users/sovanesyan/Work/tensorflow-full")
+	repo, _ := git.OpenRepository(repositoryPath)
 	return repo
 }
 
@@ -70,7 +76,7 @@ func findCommitIds() chan git.Oid {
 		log.Print("something")
 		walker.Iterate(func(commit *git.Commit) bool {
 
-			if commitCount >= 500 {
+			if commitCount >= maxCommits {
 				close(channel)
 				return false
 			}
@@ -86,10 +92,9 @@ func findCommitIds() chan git.Oid {
 }
 
 func processCommit(oid git.Oid) Commit {
+	log.Print(oid.String())
 	repo := createRepository()
-	defer repo.Free()
 	commit, _ := repo.LookupCommit(&oid)
-	defer commit.Free()
 	cm := createCommitMetadata(commit)
 	if commit.ParentCount() == 0 {
 		diff := createDiff(commit, nil, repo)
@@ -102,21 +107,28 @@ func processCommit(oid git.Oid) Commit {
 		applyStats(&cm, diff)
 
 		diff.ForEach(func(delta git.DiffDelta, number float64) (git.DiffForEachHunkCallback, error) {
+
 			return func(hunk git.DiffHunk) (git.DiffForEachLineCallback, error) {
 
 				blame := blameFile(commit, parent, &hunk, &delta, repo)
-
 				cm.hunkChanges++
 				cm.newWork += uint(hunk.NewLines - hunk.OldLines)
 
 				return func(line git.DiffLine) error {
 					if delta.NewFile.Mode == 57344 {
-						log.Printf("Panic averted: %v", commit.Id())
+						log.Printf("Submodule change ignored: %v", commit.Id())
+						return nil
+					}
+					if strings.HasPrefix(line.Content, "Subproject commit") {
+						log.Printf("Submodule added ignored: %v", commit.Id())
+
+						cm.newWork++
 						return nil
 					}
 					if line.NewLineno != -1 {
 						return nil
 					}
+
 					hunk, _ := blame.HunkByLine(line.OldLineno)
 
 					if commit.Author().When.Add(-3 * 7 * 24 * time.Hour).After(hunk.FinalSignature.When) {
@@ -129,7 +141,9 @@ func processCommit(oid git.Oid) Commit {
 					return nil
 				}, nil
 			}, nil
+
 		}, git.DiffDetailLines)
+
 	}
 	return cm
 }
@@ -166,7 +180,7 @@ func createDiff(commit, parent *git.Commit, repo *git.Repository) git.Diff {
 	}
 
 	diffOptions, _ := git.DefaultDiffOptions()
-	diffOptions.IgnoreSubmodules = git.SubmoduleIgnoreAll
+
 	diff, _ := repo.DiffTreeToTree(parentTree, tree, &diffOptions)
 
 	return *diff
