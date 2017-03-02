@@ -1,8 +1,13 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"runtime"
+	"runtime/debug"
 	"strings"
+
+	"github.com/bradhe/stopwatch"
 
 	"time"
 
@@ -26,35 +31,31 @@ type Commit struct {
 	churn        uint
 }
 
-const maxCommits = 50000
+const maxCommits = 500
 
 //const repositoryPath = "/Users/sovanesyan/Work/tensorflow-full"
+
 const repositoryPath = "/Users/sovanesyan/Work/angular"
 
 func main() {
+	start := stopwatch.Start()
 	// f, _ := os.Create("cpu.prof")
 	// pprof.StartCPUProfile(f)
 	// defer pprof.StopCPUProfile()
+	debug.SetGCPercent(-1)
 
 	log.Print("Started")
-	processRepository()
-	log.Print("Finished")
-
-	// oid, _ := git.NewOid("ea2aac69da10fed4acac18dc291790433d9af0ac")
-	// commit, _ := repo.LookupCommit(oid)
-	// cm := processCommit(commit, repo)
-	// log.Print(cm)
-}
-
-func processRepository() {
-
 	ids := findCommitIds()
+	commits := calculateCommits(ids)
+	for commit := range commits {
+		log.Print(commit.id)
 
-	commits := make(map[string]Commit)
-	for oid := range ids {
-		commits[oid.String()] = processCommit(oid)
-		log.Print(oid.String())
+		runtime.GC()
 	}
+
+	log.Print("Finished")
+	watch := stopwatch.Stop(start)
+	fmt.Printf("Seconds elapsed: %v\n", watch.Milliseconds()/1000)
 }
 
 func createRepository() *git.Repository {
@@ -75,9 +76,7 @@ func findCommitIds() chan git.Oid {
 	go func() {
 		log.Print("something")
 		walker.Iterate(func(commit *git.Commit) bool {
-
 			if commitCount >= maxCommits {
-				close(channel)
 				return false
 			}
 
@@ -86,8 +85,25 @@ func findCommitIds() chan git.Oid {
 
 			return true
 		})
+
+		close(channel)
 	}()
-	log.Print("bohos")
+	return channel
+}
+
+func calculateCommits(ids chan git.Oid) chan Commit {
+	channel := make(chan Commit)
+
+	go func() {
+		for oid := range ids {
+			channel <- processCommit(oid)
+			log.Print(oid.String())
+
+			runtime.GC()
+		}
+		close(channel)
+	}()
+
 	return channel
 }
 
@@ -103,7 +119,7 @@ func processCommit(oid git.Oid) Commit {
 	}
 	for i := uint(0); i < commit.ParentCount(); i++ {
 		parent := commit.Parent(i)
-		diff := createDiff(commit, commit.Parent(i), repo)
+		diff := createDiff(commit, parent, repo)
 		applyStats(&cm, diff)
 
 		diff.ForEach(func(delta git.DiffDelta, number float64) (git.DiffForEachHunkCallback, error) {
