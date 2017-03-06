@@ -76,7 +76,7 @@ func (commit *Commit) toSlice() []string {
 		commit.authorEmail,
 		commit.authorName,
 		strconv.FormatBool(commit.isMerge),
-		strconv.FormatInt(commit.createdAt.Unix(), 10),
+		commit.createdAt.UTC().Format("2006-01-02 15:04:05"),
 
 		strconv.FormatUint(commit.insertions, 10),
 		strconv.FormatUint(commit.deletions, 10),
@@ -98,9 +98,9 @@ func (commit *Commit) toSlice() []string {
 
 const maxCommits = 500
 
-//const repositoryPath = "/Users/sovanesyan/Work/tensorflow-full"
+const repositoryPath = "/Users/sovanesyan/Work/tensorflow-full"
 
-const repositoryPath = "/Users/sovanesyan/Work/angular"
+//const repositoryPath = "/Users/sovanesyan/Work/angular"
 
 func main() {
 	repositoryPtr := flag.String("repository", repositoryPath, "Repository to parse")
