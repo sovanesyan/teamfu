@@ -96,11 +96,11 @@ func (commit *Commit) toSlice() []string {
 	}
 }
 
-const maxCommits = 500
+const maxCommits = 2000
 
-const repositoryPath = "/Users/sovanesyan/Work/tensorflow-full"
-
+//const repositoryPath = "/Users/sovanesyan/Work/tensorflow-full"
 //const repositoryPath = "/Users/sovanesyan/Work/angular"
+const repositoryPath = "/Users/sovanesyan/Work/vue"
 
 func main() {
 	repositoryPtr := flag.String("repository", repositoryPath, "Repository to parse")
@@ -116,7 +116,7 @@ func main() {
 	start := stopwatch.Start()
 
 	// debug
-	// oid, _ := git.NewOid("5ba55b0e043a3a421ce94a6f56dd97aa17529227")
+	// oid, _ := git.NewOid("b43cf1f257fa8c5cfa8d8e7528cb34c9969749de")
 	// log.Printf("%+v", processCommit(createRepository, *oid))
 
 	log.Print("Started")
@@ -134,7 +134,16 @@ func findCommitIds(createRepository func() *git.Repository) chan git.Oid {
 	walker, _ := repo.Walk()
 
 	commitCount := 0
-	walker.PushHead()
+	referenceNames, _ := repo.NewReferenceIterator()
+	for {
+		reference, err := referenceNames.Next()
+		if err != nil {
+			break
+		}
+		if !reference.IsTag() && reference.IsRemote() {
+			walker.PushRef(reference.Name())
+		}
+	}
 	//walker.Sorting(git.SortReverse)
 	channel := make(chan git.Oid)
 
@@ -171,7 +180,9 @@ func calculateCommits(createRepository func() *git.Repository, ids chan git.Oid)
 }
 
 func writeToFile(commits chan Commit) {
-	outputFile, err := os.OpenFile("output.csv", os.O_WRONLY|os.O_CREATE, 0666)
+	filePath := "output.csv"
+	os.Remove(filePath)
+	outputFile, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE, 0666)
 	if err != nil {
 		return
 	}
@@ -181,6 +192,7 @@ func writeToFile(commits chan Commit) {
 	writer.Write(getHeaders())
 
 	for commit := range commits {
+		//log.Print(commit.toSlice())
 		writer.Write(commit.toSlice())
 
 		writer.Flush()
@@ -204,8 +216,8 @@ func processCommit(createRepository func() *git.Repository, oid git.Oid) Commit 
 
 		diff.ForEach(func(delta git.DiffDelta, number float64) (git.DiffForEachHunkCallback, error) {
 			cm.filesChanged++
-			return func(hunk git.DiffHunk) (git.DiffForEachLineCallback, error) {
 
+			return func(hunk git.DiffHunk) (git.DiffForEachLineCallback, error) {
 				blame := blameFile(commit, parent, &hunk, &delta, repo)
 				cm.hunkChanges++
 
@@ -227,7 +239,6 @@ func processCommit(createRepository func() *git.Repository, oid git.Oid) Commit 
 					if line.OldLineno == -1 || (line.NewLineno != -1 && line.OldLineno != -1) {
 						return nil
 					}
-
 					hunk, _ := blame.HunkByLine(line.OldLineno)
 					between := commit.Author().When.Sub(hunk.FinalSignature.When)
 					months := between.Hours() / (30 * 24)
@@ -274,7 +285,7 @@ func findOldEnoughCommit(commit git.Commit) *git.Commit {
 func createCommitMetadata(commit *git.Commit) Commit {
 	commitMetadata := new(Commit)
 	commitMetadata.id = commit.Id().String()
-	commitMetadata.isMerge = commit.ParentCount() != 1
+	commitMetadata.isMerge = commit.ParentCount() > 1
 	commitMetadata.authorEmail = commit.Author().Email
 	commitMetadata.authorName = commit.Author().Name
 	commitMetadata.createdAt = commit.Author().When
@@ -291,8 +302,13 @@ func createDiff(commit, parent *git.Commit, repo *git.Repository) git.Diff {
 	}
 
 	diffOptions, _ := git.DefaultDiffOptions()
+	diffOptions.Pathspec = []string{"!dist", "!packages", "*"}
+	diffOptions.ContextLines = 0
 
 	diff, _ := repo.DiffTreeToTree(parentTree, tree, &diffOptions)
+
+	findOptions, _ := git.DefaultDiffFindOptions()
+	diff.FindSimilar(&findOptions)
 
 	return *diff
 }
